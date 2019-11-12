@@ -1,6 +1,11 @@
+#[cfg(feature="serde")]
+#[macro_use]
+extern crate serde;
+
 use std::str::Chars;
 use std::iter::{Enumerate, Peekable};
 
+#[cfg_attr(feature="serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tag {
     /// Tag name
@@ -10,6 +15,7 @@ pub struct Tag {
     pub text: String,
 }
 
+#[cfg_attr(feature="serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comment {
     /// Brief description of the function purpose
