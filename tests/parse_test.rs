@@ -1,14 +1,17 @@
 extern crate spdcp;
 
 const RAW: &'static str = "/**
- * Gets a function id from a function name.
- *
- * @param plugin        Handle of the plugin that contains the function.
- *                      Pass INVALID_HANDLE to search in the calling plugin.
- * @param name          Name of the function.
- * @return              Function id or INVALID_FUNCTION if not found.
- * @error               Invalid or corrupt plugin handle.
- */";
+* Adds targets to an admin menu.
+*
+* Each client is displayed as: name (userid)
+* Each item contains the userid as a string for its info.
+*
+* @param menu          Menu Handle.
+* @param source_client Source client, or 0 to ignore immunity.
+* @param in_game_only  True to only select in-game players.
+* @param alive_only    True to only select alive players.
+* @return              Number of clients added.
+*/";
 
 #[test]
 fn parse_test() {

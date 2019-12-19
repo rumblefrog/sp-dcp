@@ -131,7 +131,7 @@ impl Comment {
                 continue;
             }
 
-            if chr == ' ' || !first_char {
+            if chr.is_whitespace() || !first_char {
                 continue;
             }
 
@@ -181,19 +181,16 @@ impl Comment {
                 let tag_end = line.find(' ');
                 let tag_end_some: usize;
 
-                if let Some(tgs) = tag_end {
-                    if tgs == 1 {
-                        continue;
-                    }
-
-                    tag_end_some = tgs;
-                } else {
-                    continue;
-                }
+                tag_end_some = match tag_end {
+                    Some(t) if t != 1 => t,
+                    _ => continue,
+                };
 
                 if index != 0 {
                     self.push_block(block_tag, block_lines.clone());
                 }
+
+                block_lines.clear();
 
                 block_tag = line[1..tag_end_some].to_string();
 
@@ -215,7 +212,6 @@ impl Comment {
                     }
                 }
             }
-
 
             block_lines.push(line);
 
@@ -240,13 +236,8 @@ impl Comment {
             lines.drain(0..1);
         }
 
-        for line in &mut lines {
-            if line.is_empty() {
-                *line = "\n".to_string();
-            }
-        }
-
-        let text: String = lines.into_iter().collect();
+        // Preserve line breaks for display
+        let text = lines.join("\n");
 
         if tag.is_empty() || tag == "brief" {
             if !self.brief.is_empty() {
