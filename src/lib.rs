@@ -247,7 +247,7 @@ impl Comment {
             }
         }
 
-        let text = lines.join(" ");
+        let text = lines.join(" ").trim_start().to_string();
 
         if tag.is_empty() || tag == "brief" {
             if !self.brief.is_empty() {
