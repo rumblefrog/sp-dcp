@@ -166,10 +166,9 @@ impl Comment {
             let mut line = line.to_string();
 
             line = line.trim_start().to_string();
-            // line = line.trim_start_matches('\n').to_string();
             line = line.trim_start_matches('*').to_string();
             line = line.trim_start_matches('<').to_string();
-            // line = line.trim_matches(" \v\t");
+            line = line.replace(" \x0B\t", "");
             line = line.replace('\t', " ");
 
             if line.starts_with("//") {
@@ -247,7 +246,7 @@ impl Comment {
             }
         }
 
-        let text = lines.join(" ").trim_start().to_string();
+        let text: String = lines.into_iter().collect();
 
         if tag.is_empty() || tag == "brief" {
             if !self.brief.is_empty() {
