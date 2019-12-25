@@ -1,6 +1,6 @@
 [package]
 name = "spdcp"
-version = "0.4.3"
+version = "0.4.4"
 description = "A library for parsing docparse comment range"
 authors = ["rumblefrog <contact@rumblefrog.me>"]
 repository = "https://github.com/rumblefrog/sp-dcp"

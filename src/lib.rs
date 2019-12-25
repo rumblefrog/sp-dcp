@@ -151,7 +151,7 @@ impl Comment {
         }
 
         if body_end == 0 {
-            body_end = current_known_pos;
+            body_end = current_known_pos + 1;
         }
 
         self.parse_lines(data[body_start..body_end].to_string());
