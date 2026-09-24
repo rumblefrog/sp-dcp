@@ -17,5 +17,13 @@ const RAW: &'static str = "/**
 fn parse_test() {
     let s = spdcp::Comment::parse(RAW);
 
-    println!("{:?}", s);
+    assert_eq!(
+        s.brief,
+        "Adds targets to an admin menu.\n\nEach client is displayed as: name (userid)\nEach item contains the userid as a string for its info."
+    );
+    assert_eq!(s.tag("param:menu"), Some("Menu Handle."));
+    assert_eq!(s.tag("param:source_client"), Some("Source client, or 0 to ignore immunity."));
+    assert_eq!(s.tag("param:alive_only"), Some("True to only select alive players."));
+    assert_eq!(s.tag("return"), Some("Number of clients added."));
+    assert_eq!(s.tags.len(), 6);
 }
