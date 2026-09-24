@@ -1,254 +1,337 @@
-#[cfg(feature="serde")]
+//! Parses SourcePawn documentation comments into a brief and tags.
+//!
+//! ```
+//! let comment = spdcp::Comment::parse("/**
+//!  * Closes a Handle.
+//!  *
+//!  * @note Closing a Handle has a different meaning for each Handle type.
+//!  * @param hndl  Handle to close.
+//!  */");
+//!
+//! assert_eq!(comment.brief, "Closes a Handle.");
+//! assert_eq!(comment.tag("note"), Some("Closing a Handle has a different meaning for each Handle type."));
+//! assert_eq!(comment.tag("param:hndl"), Some("Handle to close."));
+//! ```
+
+#[cfg(feature = "serde")]
 #[macro_use]
 extern crate serde;
 
-use std::str::Chars;
-use std::iter::{Enumerate, Peekable};
-
-#[cfg_attr(feature="serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tag {
-    /// Tag name
+    /// Tag name, `param:<name>` for parameters and empty for untagged text
     pub tag: String,
 
     /// Tag content
     pub text: String,
 }
 
-#[cfg_attr(feature="serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Comment {
-    /// Brief description of the function purpose
+    /// Brief description of the symbol
     pub brief: String,
 
-    /// Tags of the symbol
+    /// Tags of the symbol, in source order. Untagged text is included with an empty tag name.
     pub tags: Vec<Tag>,
 }
 
 impl Comment {
-    /// Parse the comment into data structures
-    /// 
-    /// # Example
-    /// 
-    /// ```
-    /// use std::fs;
-    /// use spdcp::Comment;
-    /// 
-    /// fn main() {
-    ///     // Read the comment block from a data source
-    ///     let data = fs::read_to_string("data/comment_block.txt").expect("Unable to read file");
-    /// 
-    ///     let parsed = Comment::parse(data);
-    /// 
-    ///     println!("{:?}", parsed);
-    /// }
-    /// ```
+    /// Parses the raw text of one or more comments, including their
+    /// `/*`, `*/` or `//` delimiters.
+    ///
+    /// Consecutive `//` lines form one comment. When `//` label comments are
+    /// directly followed by a block comment (`// Natives` above `/** ... */`),
+    /// only the block comment is used.
     pub fn parse<T>(data: T) -> Comment
     where
         T: Into<String>,
     {
-        let mut s = data.into();
-
-        s = s.replace("\r\n", "\n");
-        s = s.replace("\r", "\n");
-
-        let mut comment = Comment {
-            brief: "".to_string(),
-            tags: Vec::new(),
-        };
-
-        let mut iter = s.chars().enumerate().peekable();
-
-        while let Some((_, chr)) = iter.next() {
-            if chr == '/' {
-                if let Some((next_index, next_chr)) = iter.peek() {
-                    let ni = *next_index;
-
-                    if *next_chr == '*' {
-                        // Blank next to fast forward one char
-                        iter.next();
-
-                        let pos = ni + 1;
-
-                        comment.parse_multi(s.clone(), &mut iter, pos);
-                    } else if let Some((sub_next_index, sub_next_chr)) = iter.peek() {
-                        let ni = *sub_next_index;
-
-                        if *sub_next_chr == '/' {
-                            iter.next();
-
-                            let pos = ni + 1;
-
-                            comment.parse_single(s.clone(), &mut iter, pos)
-                        }
-                    }
-                }
-            }
-        }
-
-        comment
+        parse_str(&data.into())
     }
 
-    fn parse_multi(&mut self, data: String, iter: &mut Peekable<Enumerate<Chars<'_>>>, current_pos: usize) {
-        let mut current_known_pos = current_pos;
-        let body_start  = current_pos;
-        let mut body_end = 0;
-
-        while let Some((index, chr)) = iter.next() {
-            current_known_pos = index;
-
-            if chr == '*' {
-                if let Some((next_index, next_chr)) = iter.next() {
-                    if next_chr == '/' {
-                        body_end = next_index - 2;
-
-                        current_known_pos = next_index;
-
-                        break;
-                    }
-                }
-            }
-        }
-
-        if body_end == 0 {
-            body_end = current_known_pos;
-        }
-
-        self.parse_lines(data[body_start..body_end].to_string());
+    /// Text of the first tag named `tag`, e.g. `note` or `param:client`
+    pub fn tag(&self, tag: &str) -> Option<&str> {
+        self.tags
+            .iter()
+            .find(|t| t.tag == tag)
+            .map(|t| t.text.as_str())
     }
 
-    fn parse_single(&mut self, data: String, iter: &mut Peekable<Enumerate<Chars<'_>>>, current_pos: usize) {
-        let mut current_known_pos = current_pos;
-        let body_start  = current_pos;
-        let mut body_end = 0;
-        let mut first_char: bool = false;
+    /// Text of every tag named `tag`, e.g. all `note`s
+    pub fn tags_named<'a>(&'a self, tag: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.tags
+            .iter()
+            .filter(move |t| t.tag == tag)
+            .map(|t| t.text.as_str())
+    }
+}
 
-        while let Some((index, chr)) = iter.next() {
-            current_known_pos = index;
+/// Parses the raw text of one or more comments (including `/*`, `*/` and `//`)
+fn parse_str(raw: &str) -> Comment {
+    let text = raw.replace("\r\n", "\n").replace('\r', "\n");
 
-            if chr == '\n' {
-                first_char = true;
+    let mut comment = Comment {
+        brief: String::new(),
+        tags: Vec::new(),
+    };
+
+    let mut bodies = bodies(&text);
+
+    // A `//` section label right above a doc block, like `// Natives`
+    // followed by `/** ... */`, isn't part of the documentation
+    if bodies.len() > 1 && bodies.iter().any(|(block, _)| *block) {
+        let labels = bodies.iter().take_while(|(block, _)| !*block).count();
+        bodies.drain(..labels);
+    }
+
+    for (_, body) in bodies {
+        parse_lines(&mut comment, &body);
+    }
+
+    comment
+}
+
+/// Splits comment text into comment bodies, flagged whether they're block
+/// comments. Consecutive `//` lines form one body.
+fn bodies(text: &str) -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    let mut line_run: Option<Vec<&str>> = None;
+
+    loop {
+        let trimmed = rest.trim_start();
+
+        if let Some(after) = trimmed.strip_prefix("//") {
+            let end = after.find('\n').unwrap_or(after.len());
+            line_run.get_or_insert_with(Vec::new).push(&after[..end]);
+            rest = &after[end..];
+            continue;
+        }
+
+        if let Some(run) = line_run.take() {
+            out.push((false, run.join("\n")));
+        }
+
+        if let Some(after) = trimmed.strip_prefix("/*") {
+            let end = after.find("*/").unwrap_or(after.len());
+            out.push((true, after[..end].to_string()));
+            rest = after.get(end + 2..).unwrap_or("");
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            break;
+        }
+
+        // Stray text between comments, skip to the next comment
+        match trimmed.find('/') {
+            Some(p) if p > 0 => rest = &trimmed[p..],
+            _ => match trimmed.get(1..) {
+                Some(r) => rest = r,
+                None => break,
+            },
+        }
+    }
+
+    if let Some(run) = line_run.take() {
+        out.push((false, run.join("\n")));
+    }
+
+    out
+}
+
+fn clean_line(line: &str) -> String {
+    let mut line = line.trim_start();
+    line = line.trim_start_matches('*');
+    line = line.trim_start_matches('<');
+    let mut line = line.replace(" \x0B\t", "").replace('\t', " ");
+    if line.starts_with('/') {
+        line = line.trim_start_matches('/').to_string();
+    }
+    line.trim().to_string()
+}
+
+fn parse_lines(comment: &mut Comment, data: &str) {
+    let mut first = true;
+    let mut block_tag = String::new();
+    let mut block_lines: Vec<String> = Vec::new();
+
+    for line in data.split('\n') {
+        let mut line = clean_line(line);
+
+        if let Some(tagged) = line.strip_prefix('@') {
+            // Tolerate `@ note ...`
+            let tagged = tagged.trim_start();
+            let (name, text) = match tagged.find(' ') {
+                Some(end) => (&tagged[..end], tagged[end + 1..].trim()),
+                None => (tagged, ""),
+            };
+
+            // A lone `@` isn't a tag
+            if name.is_empty() {
+                block_lines.push(line);
+                first = false;
                 continue;
             }
 
-            if chr.is_whitespace() || !first_char {
-                continue;
+            if !first {
+                push_block(comment, &block_tag, std::mem::take(&mut block_lines));
             }
+            block_lines.clear();
 
-            first_char = false;
+            block_tag = name.to_string();
+            let mut text = text.to_string();
 
-            if chr == '/' {
-                if let Some((_, peek_chr)) = iter.peek() {
-                    if *peek_chr != '/' {
-                        body_end = current_known_pos - 1;
-                        break;
+            if block_tag == "param" {
+                match text.find(' ') {
+                    Some(i) => {
+                        block_tag = format!("param:{}", &text[..i]);
+                        text = text[i + 1..].trim().to_string();
                     }
-
-                    // If does match, we'll do a blank next to seek to next
-                    iter.next();
+                    None if !text.is_empty() => {
+                        block_tag = format!("param:{}", text);
+                        text = String::new();
+                    }
+                    None => block_tag = "param:unknown".to_string(),
                 }
             }
+
+            line = text;
         }
 
-        if body_end == 0 {
-            body_end = current_known_pos + 1;
-        }
-
-        self.parse_lines(data[body_start..body_end].to_string());
+        block_lines.push(line);
+        first = false;
     }
 
-    fn parse_lines(&mut self, data: String) {
-        let mut index = 0;
-        let mut block_tag: String = "".to_string();
-        let mut block_lines: Vec<String> = Vec::new();
+    push_block(comment, &block_tag, block_lines);
+}
 
-        for line in data.split('\n') {
-            let mut line = line.to_string();
-
-            line = line.trim_start().to_string();
-            line = line.trim_start_matches('*').to_string();
-            line = line.trim_start_matches('<').to_string();
-            line = line.replace(" \x0B\t", "");
-            line = line.replace('\t', " ");
-
-            if line.starts_with("//") {
-                line = line.trim_start_matches('/').to_string();
-            }
-
-            line = line.trim().to_string();
-
-            if line.starts_with('@') {
-                let tag_end = line.find(' ');
-                let tag_end_some: usize;
-
-                tag_end_some = match tag_end {
-                    Some(t) if t != 1 => t,
-                    _ => continue,
-                };
-
-                if index != 0 {
-                    self.push_block(block_tag, block_lines.clone());
-                }
-
-                block_lines.clear();
-
-                block_tag = line[1..tag_end_some].to_string();
-
-                line = line[tag_end_some+1..].trim().to_string();
-
-                if block_tag == "param" {
-                    let param_end = line.find(' ');
-
-                    match param_end {
-                        Some(i) => {
-                            block_tag += ":";
-                            block_tag += &line[..i];
-
-                            line = line[i+1..].trim().to_string();
-                        },
-                        None => {
-                            block_tag += ":unknown";
-                        }
-                    }
-                }
-            }
-
-            block_lines.push(line);
-
-            index += 1;
-        }
-
-        self.push_block(block_tag, block_lines);
+fn push_block(comment: &mut Comment, tag: &str, mut lines: Vec<String>) {
+    if lines.is_empty() {
+        return;
     }
 
-    fn push_block(&mut self, tag: String, lines: Vec<String>) {
-        let mut lines = lines;
+    // Flag-like tags without any text such as `@noreturn` carry no information
+    if !tag.is_empty() && !tag.starts_with("param:") && lines.iter().all(|l| l.is_empty()) {
+        return;
+    }
 
-        if lines.is_empty() {
-            return;
+    while lines.last().map_or(false, |l| l.is_empty()) {
+        lines.pop();
+    }
+
+    let leading = lines.iter().take_while(|l| l.is_empty()).count();
+    lines.drain(..leading);
+
+    // Preserve line breaks for display
+    let text = lines.join("\n");
+
+    if tag.is_empty() || tag == "brief" {
+        if !comment.brief.is_empty() {
+            comment.brief += "\n";
         }
+        comment.brief += &text;
+    }
 
-        if lines.last().unwrap().is_empty() {
-            lines.truncate(lines.len() - 1);
-        }
+    comment.tags.push(Tag {
+        tag: tag.to_string(),
+        text,
+    })
+}
 
-        if !lines.is_empty() && lines.first().unwrap().is_empty() {
-            lines.drain(0..1);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // Preserve line breaks for display
-        let text = lines.join("\n");
+    fn tag<'a>(c: &'a Comment, name: &str) -> Option<&'a str> {
+        c.tag(name)
+    }
 
-        if tag.is_empty() || tag == "brief" {
-            if !self.brief.is_empty() {
-                self.brief += "\n";
-            }
-            self.brief += &text;
-        }
 
-        self.tags.push(Tag {
-            tag,
-            text,
-        })
+    fn parse(raw: &str) -> Comment {
+        Comment::parse(raw)
+    }
+
+    #[test]
+    fn close_handle() {
+        let c = parse(
+            "/**
+ * Closes a Handle.  If the handle has multiple copies open,
+ * it is not destroyed unless all copies are closed.
+ *
+ * @note Closing a Handle has a different meaning for each Handle type.  Make
+ *       sure you read the documentation on whatever provided the Handle.
+ *
+ * @param hndl          Handle to close.
+ * @error               Invalid handles will cause a run time error.
+ */",
+        );
+        assert_eq!(
+            c.brief,
+            "Closes a Handle.  If the handle has multiple copies open,\nit is not destroyed unless all copies are closed."
+        );
+        assert_eq!(
+            tag(&c, "note").unwrap(),
+            "Closing a Handle has a different meaning for each Handle type.  Make\nsure you read the documentation on whatever provided the Handle."
+        );
+        assert_eq!(tag(&c, "param:hndl").unwrap(), "Handle to close.");
+        assert_eq!(tag(&c, "error").unwrap(), "Invalid handles will cause a run time error.");
+    }
+
+    #[test]
+    fn note_on_its_own_line() {
+        let c = parse("/**\n * Brief.\n *\n * @note\n *   Details here.\n * @return Something.\n */");
+        assert_eq!(c.brief, "Brief.");
+        assert_eq!(tag(&c, "note").unwrap(), "Details here.");
+        assert_eq!(tag(&c, "return").unwrap(), "Something.");
+    }
+
+    #[test]
+    fn spaced_and_empty_tags() {
+        let c = parse("/**\n * Brief.\n * @ note Spaced.\n * @noreturn\n */");
+        assert_eq!(c.brief, "Brief.");
+        assert_eq!(tag(&c, "note").unwrap(), "Spaced.");
+        assert_eq!(tag(&c, "noreturn"), None);
+    }
+
+    #[test]
+    fn section_label_above_doc_block() {
+        let c = parse("//Natives\n/**\n * Real doc.\n **/");
+        assert_eq!(c.brief, "Real doc.");
+    }
+
+    #[test]
+    fn multiple_notes() {
+        let c = parse("/**\n * @note One.\n * @note Two.\n */");
+        assert_eq!(c.tags_named("note").collect::<Vec<_>>(), vec!["One.", "Two."]);
+    }
+
+    #[test]
+    fn param_without_description() {
+        let c = parse("/** @param client */");
+        assert_eq!(tag(&c, "param:client"), Some(""));
+    }
+
+    #[test]
+    fn line_comments() {
+        let c = parse("// First line\n// second line");
+        assert_eq!(c.brief, "First line\nsecond line");
+
+        let c = parse("/// Triple slash");
+        assert_eq!(c.brief, "Triple slash");
+    }
+
+    #[test]
+    fn trailing_member_comment() {
+        let c = parse("/**< Change sound pitch*/");
+        assert_eq!(c.brief, "Change sound pitch");
+    }
+
+    #[test]
+    fn non_ascii() {
+        let c = parse("/** Größe — ok */");
+        assert_eq!(c.brief, "Größe — ok");
     }
 }
